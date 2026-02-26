@@ -15,7 +15,9 @@ import org.reflections.Reflections;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * GhidraMCP Plugin - Model Context Protocol Server for Ghidra
@@ -65,8 +67,17 @@ import java.util.*;
 @PluginInfo(status = PluginStatus.RELEASED, packageName = ghidra.app.DeveloperPluginPackage.NAME, category = PluginCategoryNames.ANALYSIS, shortDescription = "HTTP server plugin", description = "Starts an embedded HTTP server to expose program data. Port configurable via Tool Options.")
 public class GhidraMCPPlugin extends Plugin {
 
+	/** Registry of all active GhidraMCP plugin instances, keyed by port number */
+	private static final ConcurrentHashMap<Integer, GhidraMCPPlugin> activeInstances = new ConcurrentHashMap<>();
+
+	/** Maximum number of ports to scan when looking for an available port */
+	private static final int MAX_PORT_SCAN = 100;
+
 	/** The embedded HTTP server instance that handles all API requests */
 	private HttpServer server;
+
+	/** The port this instance is actually listening on (-1 if not started) */
+	private int activePort = -1;
 
 	/** Configuration category name for tool options */
 	private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
@@ -89,8 +100,8 @@ public class GhidraMCPPlugin extends Plugin {
 	/** Default decompile timeout in seconds */
 	private static final int DEFAULT_DECOMPILE_TIMEOUT = 30;
 
-	/** HashMap to store all registered API routes */
-	private static final HashMap<String, Handler> routes = new HashMap<>();
+	/** HashMap to store registered API routes for this instance */
+	private final HashMap<String, Handler> routes = new HashMap<>();
 
 	/** The timeout for decompilation requests in seconds */
 	private int decompileTimeout;
@@ -188,16 +199,26 @@ public class GhidraMCPPlugin extends Plugin {
 	 * @see #parseQueryParams(HttpExchange)
 	 */
 	private void startServer() throws IOException {
-		// Read the configured port
+		// Read the configured port and address
 		Options options = tool.getOptions(OPTION_CATEGORY_NAME);
 		String listenAddress = options.getString(ADDRESS_OPTION_NAME, DEFAULT_ADDRESS);
-		int port = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
+		int configuredPort = options.getInt(PORT_OPTION_NAME, DEFAULT_PORT);
 
 		// Stop existing server if running (e.g., if plugin is reloaded)
 		if (server != null) {
 			Msg.info(this, "Stopping existing HTTP server before starting new one.");
+			if (activePort > 0) {
+				activeInstances.remove(activePort);
+			}
 			server.stop(0);
 			server = null;
+			activePort = -1;
+		}
+
+		// Find an available port starting from the configured one
+		int port = findAvailablePort(listenAddress, configuredPort);
+		if (port != configuredPort) {
+			Msg.info(this, "Configured port " + configuredPort + " unavailable, using port " + port);
 		}
 
 		InetSocketAddress inetAddress = new InetSocketAddress(listenAddress, port);
@@ -212,7 +233,6 @@ public class GhidraMCPPlugin extends Plugin {
 		Reflections reflections = new Reflections("com.lauriewired.handlers");
 		Set<Class<? extends Handler>> subclasses = reflections.getSubTypesOf(Handler.class);
 		for (Class<?> clazz : subclasses) {
-			System.out.println(clazz.getName());
 			try {
 				Constructor<?> constructor = clazz.getConstructor(PluginTool.class);
 				Handler handler = (Handler) constructor.newInstance(tool);
@@ -236,16 +256,45 @@ public class GhidraMCPPlugin extends Plugin {
 			}
 		}
 
+		final int resolvedPort = port;
 		server.setExecutor(null);
 		new Thread(() -> {
 			try {
 				server.start();
-				Msg.info(this, "GhidraMCP HTTP server started on port " + port);
+				activePort = resolvedPort;
+				activeInstances.put(activePort, GhidraMCPPlugin.this);
+				Msg.info(this, "GhidraMCP HTTP server started on port " + resolvedPort);
 			} catch (Exception e) {
-				Msg.error(this, "Failed to start HTTP server on port " + port + ". Port might be in use.", e);
-				server = null; // Ensure server isn't considered running
+				Msg.error(this, "Failed to start HTTP server on port " + resolvedPort + ". Port might be in use.", e);
+				server = null;
 			}
 		}, "GhidraMCP-HTTP-Server").start();
+	}
+
+	/**
+	 * Finds an available port starting from the configured base port.
+	 * Checks both the internal instance registry and actual socket availability.
+	 *
+	 * @param address the listen address to bind to
+	 * @param basePort the configured/desired port
+	 * @return an available port number
+	 * @throws IOException if no available port is found
+	 */
+	private int findAvailablePort(String address, int basePort) throws IOException {
+		for (int i = 0; i < MAX_PORT_SCAN; i++) {
+			int candidate = basePort + i;
+			if (activeInstances.containsKey(candidate)) {
+				continue;
+			}
+			try (ServerSocket ss = new ServerSocket()) {
+				ss.setReuseAddress(true);
+				ss.bind(new InetSocketAddress(address, candidate));
+				return candidate;
+			} catch (IOException e) {
+				// port in use, try next
+			}
+		}
+		throw new IOException("No available port found in range " + basePort + "-" + (basePort + MAX_PORT_SCAN - 1));
 	}
 
 	/**
@@ -275,12 +324,42 @@ public class GhidraMCPPlugin extends Plugin {
 	 */
 	@Override
 	public void dispose() {
+		if (activePort > 0) {
+			activeInstances.remove(activePort);
+			Msg.info(this, "Unregistered GhidraMCP instance on port " + activePort);
+			activePort = -1;
+		}
 		if (server != null) {
 			Msg.info(this, "Stopping GhidraMCP HTTP server...");
-			server.stop(1); // Stop with a small delay (e.g., 1 second) for connections to finish
-			server = null; // Nullify the reference
+			server.stop(1);
+			server = null;
 			Msg.info(this, "GhidraMCP HTTP server stopped.");
 		}
 		super.dispose();
+	}
+
+	/** Returns the static map of all active plugin instances. */
+	public static ConcurrentHashMap<Integer, GhidraMCPPlugin> getActiveInstances() {
+		return activeInstances;
+	}
+
+	/** Returns the port this instance is listening on, or -1 if not started. */
+	public int getActivePort() {
+		return activePort;
+	}
+
+	/** Returns the domain file name of the currently loaded program, or null. */
+	public String getProgramName() {
+		ghidra.program.model.listing.Program p =
+			ghidra.program.util.GhidraProgramUtilities.getCurrentProgram(tool);
+		if (p == null) return null;
+		ghidra.framework.model.DomainFile df = p.getDomainFile();
+		return df != null ? df.getName() : p.getName();
+	}
+
+	/** Returns the Ghidra project name, or null. */
+	public String getProjectName() {
+		ghidra.framework.model.Project project = tool.getProject();
+		return project != null ? project.getName() : null;
 	}
 }

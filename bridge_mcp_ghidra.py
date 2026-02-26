@@ -8,15 +8,19 @@
 
 import sys
 import json
+import threading
 import requests
 import argparse
 import logging
+from typing import Optional
 from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
 
 DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8080/"
 DEFAULT_REQUEST_TIMEOUT = 30
+DEFAULT_DISCOVERY_BASE_PORT = 8080
+DEFAULT_DISCOVERY_RANGE = 100
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +31,34 @@ ghidra_server_url = DEFAULT_GHIDRA_SERVER
 # Initialize ghidra_request_timeout with default value
 ghidra_request_timeout = DEFAULT_REQUEST_TIMEOUT
 
-def safe_get(endpoint: str, params: dict = None) -> list:
+# Multi-instance state
+active_instances: dict[int, dict] = {}      # port -> {"port", "program", "project"}
+current_instance_port: Optional[int] = None  # currently targeted instance
+_instances_lock = threading.Lock()
+_discovery_base_port = DEFAULT_DISCOVERY_BASE_PORT
+_discovery_port_range = DEFAULT_DISCOVERY_RANGE
+
+def _resolve_base_url(port: Optional[int] = None) -> str:
+    """
+    Resolve the base URL for a Ghidra instance.
+    If port is given, construct URL from it.
+    Otherwise, use current_instance_port if set, else fall back to ghidra_server_url.
+    """
+    if port is not None:
+        return f"http://127.0.0.1:{port}/"
+    if current_instance_port is not None:
+        return f"http://127.0.0.1:{current_instance_port}/"
+    return ghidra_server_url
+
+
+def safe_get(endpoint: str, params: dict = None, port: int = None) -> list:
     """
     Perform a GET request with optional query parameters.
     """
     if params is None:
         params = {}
 
-    url = urljoin(ghidra_server_url, endpoint)
+    url = urljoin(_resolve_base_url(port), endpoint)
 
     try:
         response = requests.get(url, params=params, timeout=ghidra_request_timeout)
@@ -46,9 +70,9 @@ def safe_get(endpoint: str, params: dict = None) -> list:
     except Exception as e:
         return [f"Request failed: {str(e)}"]
 
-def safe_post(endpoint: str, data: dict | str) -> str:
+def safe_post(endpoint: str, data: dict | str, port: int = None) -> str:
     try:
-        url = urljoin(ghidra_server_url, endpoint)
+        url = urljoin(_resolve_base_url(port), endpoint)
         if isinstance(data, dict):
             response = requests.post(url, data=data, timeout=ghidra_request_timeout)
         else:
@@ -60,6 +84,132 @@ def safe_post(endpoint: str, data: dict | str) -> str:
             return f"Error {response.status_code}: {response.text.strip()}"
     except Exception as e:
         return f"Request failed: {str(e)}"
+
+def _discover_instances() -> dict[int, dict]:
+    """
+    Discover active GhidraMCP instances.
+    Strategy 1: Query /instances on any known port (fast, returns all instances).
+    Strategy 2: Port scan with /health (slow, used on initial startup).
+    """
+    discovered = {}
+
+    # Fast path: query /instances on known ports
+    known_ports = list(active_instances.keys()) if active_instances else [_discovery_base_port]
+    for port in known_ports:
+        try:
+            resp = requests.get(f"http://127.0.0.1:{port}/instances", timeout=2)
+            if resp.ok:
+                for inst in resp.json():
+                    p = inst["port"]
+                    discovered[p] = {
+                        "port": p,
+                        "program": inst.get("program") or None,
+                        "project": inst.get("project") or None,
+                    }
+                if discovered:
+                    return discovered
+        except Exception:
+            continue
+
+    # Slow path: scan ports via /health
+    for port in range(_discovery_base_port, _discovery_base_port + _discovery_port_range):
+        try:
+            resp = requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
+            if resp.ok and resp.text.strip() == "ok":
+                # Found an instance, try /instances for full details
+                try:
+                    detail_resp = requests.get(f"http://127.0.0.1:{port}/instances", timeout=2)
+                    if detail_resp.ok:
+                        for inst in detail_resp.json():
+                            p = inst["port"]
+                            discovered[p] = {
+                                "port": p,
+                                "program": inst.get("program") or None,
+                                "project": inst.get("project") or None,
+                            }
+                        return discovered
+                except Exception:
+                    discovered[port] = {"port": port, "program": None, "project": None}
+        except Exception:
+            continue
+
+    return discovered
+
+
+def _periodic_discovery():
+    """Background thread that rediscovers Ghidra instances every 30 seconds."""
+    global active_instances, current_instance_port
+    while True:
+        try:
+            discovered = _discover_instances()
+            with _instances_lock:
+                active_instances = discovered
+                # Reset current port if it's no longer available
+                if current_instance_port is not None and current_instance_port not in active_instances:
+                    logger.warning(f"Instance on port {current_instance_port} is no longer available")
+                    current_instance_port = None
+                # Auto-select if exactly one instance and no current selection
+                if current_instance_port is None and len(active_instances) == 1:
+                    current_instance_port = next(iter(active_instances))
+        except Exception as e:
+            logger.debug(f"Discovery error: {e}")
+
+        threading.Event().wait(30)
+
+
+@mcp.tool()
+def list_instances() -> list:
+    """
+    Discover and list all active Ghidra instances.
+    Returns information about each running Ghidra CodeBrowser with GhidraMCP loaded,
+    including the port number, program name, and project name.
+    The currently selected instance (if any) is marked with [ACTIVE].
+    Use use_instance(port) to switch between instances.
+    """
+    global active_instances
+
+    discovered = _discover_instances()
+    with _instances_lock:
+        active_instances = discovered
+
+    if not active_instances:
+        return ["No Ghidra instances found. Ensure GhidraMCP plugin is running in Ghidra."]
+
+    lines = []
+    for port, info in sorted(active_instances.items()):
+        marker = " [ACTIVE]" if port == current_instance_port else ""
+        program = info.get("program") or "No program loaded"
+        project = info.get("project") or "Unknown project"
+        lines.append(f"Port {port}: {program} ({project}){marker}")
+    return lines
+
+
+@mcp.tool()
+def use_instance(port: int) -> str:
+    """
+    Switch the active Ghidra instance to the one running on the specified port.
+    All subsequent tool calls will target this instance until changed.
+    Use list_instances() first to see available instances.
+
+    Args:
+        port: The port number of the Ghidra instance to target.
+    """
+    global current_instance_port, active_instances
+
+    with _instances_lock:
+        if port not in active_instances:
+            # Try a fresh discovery before failing
+            discovered = _discover_instances()
+            active_instances = discovered
+
+        if port not in active_instances:
+            return f"No Ghidra instance found on port {port}. Use list_instances() to see available instances."
+
+    current_instance_port = port
+    info = active_instances.get(port, {})
+    program = info.get("program") or "No program loaded"
+    return f"Switched to Ghidra instance on port {port} ({program})"
+
 
 @mcp.tool()
 def list_methods(offset: int = 0, limit: int = 100) -> list:
@@ -681,17 +831,38 @@ def main():
                         help="Transport protocol for MCP, default: stdio (sse is deprecated; use streamable-http)")
     parser.add_argument("--ghidra-timeout", type=int, default=DEFAULT_REQUEST_TIMEOUT,
                         help=f"MCP requests timeout, default: {DEFAULT_REQUEST_TIMEOUT}")
+    parser.add_argument("--discovery-base-port", type=int, default=DEFAULT_DISCOVERY_BASE_PORT,
+                        help=f"Base port for multi-instance discovery (default: {DEFAULT_DISCOVERY_BASE_PORT})")
+    parser.add_argument("--discovery-range", type=int, default=DEFAULT_DISCOVERY_RANGE,
+                        help=f"Number of ports to scan from base port (default: {DEFAULT_DISCOVERY_RANGE})")
     args = parser.parse_args()
-    
-    # Use the global variable to ensure it's properly updated
-    global ghidra_server_url
+
+    global ghidra_server_url, ghidra_request_timeout
+    global _discovery_base_port, _discovery_port_range
+    global active_instances, current_instance_port
+
     if args.ghidra_server:
         ghidra_server_url = args.ghidra_server
-        
-    global ghidra_request_timeout
     if args.ghidra_timeout:
         ghidra_request_timeout = args.ghidra_timeout
-    
+
+    _discovery_base_port = args.discovery_base_port
+    _discovery_port_range = args.discovery_range
+
+    # Run initial discovery
+    discovered = _discover_instances()
+    with _instances_lock:
+        active_instances.update(discovered)
+        if len(active_instances) == 1:
+            current_instance_port = next(iter(active_instances))
+            logger.info(f"Auto-selected single instance on port {current_instance_port}")
+        elif active_instances:
+            logger.info(f"Found {len(active_instances)} instances: {list(active_instances.keys())}")
+
+    # Start background discovery thread
+    discovery_thread = threading.Thread(target=_periodic_discovery, daemon=True)
+    discovery_thread.start()
+
     transport = args.transport.replace("_", "-")
     if transport in ("sse", "streamable-http"):
         try:
