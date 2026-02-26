@@ -5,7 +5,7 @@ import com.sun.net.httpserver.HttpExchange;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
-import ghidra.program.model.data.EnumDataType;
+import ghidra.program.model.data.Enum;
 import ghidra.program.model.listing.Program;
 
 import com.google.gson.Gson;
@@ -80,11 +80,11 @@ public final class RemoveEnumValues extends Handler {
 					CategoryPath path = new CategoryPath(category == null ? "/" : category);
 					DataType dt = dtm.getDataType(path, enumName);
 
-					if (dt == null || !(dt instanceof EnumDataType)) {
+					if (dt == null || !(dt instanceof Enum)) {
 						result.set("Error: Enum " + enumName + " not found in category " + path);
 						return;
 					}
-					EnumDataType enumDt = (EnumDataType) dt;
+					Enum enumDt = (Enum) dt;
 
 					StringBuilder responseBuilder = new StringBuilder(
 							"Removing values from enum " + enumName);

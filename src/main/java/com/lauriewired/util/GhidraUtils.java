@@ -90,8 +90,11 @@ public final class GhidraUtils {
 		Program program = getCurrentProgram(tool);
 		if (program == null)
 			return false;
-		if (addressStr == null || addressStr.isEmpty() || comment == null)
+		if (addressStr == null || addressStr.isEmpty())
 			return false;
+
+		// Convert empty/blank comment to null (Ghidra uses null to clear comments)
+		String effectiveComment = (comment != null && !comment.trim().isEmpty()) ? comment : null;
 
 		AtomicBoolean success = new AtomicBoolean(false);
 
@@ -100,7 +103,7 @@ public final class GhidraUtils {
 				int tx = program.startTransaction(transactionName);
 				try {
 					Address addr = program.getAddressFactory().getAddress(addressStr);
-					program.getListing().setComment(addr, commentType, comment);
+					program.getListing().setComment(addr, commentType, effectiveComment);
 					success.set(true);
 				} catch (Exception e) {
 					Msg.error(GhidraUtils.class, "Error setting " + transactionName.toLowerCase(), e);

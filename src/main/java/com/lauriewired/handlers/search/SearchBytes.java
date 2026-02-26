@@ -6,7 +6,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
-import ghidra.util.task.TaskMonitorAdapter;
+import ghidra.util.task.TaskMonitor;
 
 import java.io.IOException;
 import java.util.*;
@@ -71,7 +71,7 @@ public final class SearchBytes extends Handler {
 
 		Address cur = mem.getMinAddress();
 		while (cur != null && hits.size() < offset + limit) {
-			Address found = mem.findBytes(cur, needle, null, true, TaskMonitorAdapter.DUMMY_MONITOR);
+			Address found = mem.findBytes(cur, needle, null, true, TaskMonitor.DUMMY);
 			if (found == null)
 				break;
 			hits.add(found.toString());
