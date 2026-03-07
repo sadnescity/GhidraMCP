@@ -8,6 +8,7 @@ import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.DataUtilities;
 import ghidra.program.model.data.DataUtilities.ClearDataMode;
+import ghidra.program.model.data.Dynamic;
 import ghidra.program.model.util.CodeUnitInsertionException;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.Program;
@@ -27,7 +28,7 @@ import static ghidra.program.util.GhidraProgramUtilities.getCurrentProgram;
  * Handler for setting the data type of a global variable or data at a specific address.
  * This handler allows users to specify an address and the new data type they want to apply,
  * effectively creating typed data at memory locations.
- * 
+ *
  * Expects POST parameters:
  * - address: The memory address where to set the data type
  * - data_type: The name of the data type to apply
@@ -37,7 +38,7 @@ import static ghidra.program.util.GhidraProgramUtilities.getCurrentProgram;
 public final class SetGlobalDataType extends Handler {
 	/**
 	 * Constructor for the SetGlobalDataType handler.
-	 * 
+	 *
 	 * @param tool The PluginTool instance to use for accessing the current program.
 	 */
 	public SetGlobalDataType(PluginTool tool) {
@@ -46,7 +47,7 @@ public final class SetGlobalDataType extends Handler {
 
 	/**
 	 * Handles the HTTP request to set a global data type at a specific address.
-	 * 
+	 *
 	 * @param exchange The HttpExchange object containing the request and response.
 	 * @throws IOException If an I/O error occurs during handling.
 	 */
@@ -101,7 +102,7 @@ public final class SetGlobalDataType extends Handler {
 
 	/**
 	 * Sets the data type at the specified address.
-	 * 
+	 *
 	 * @param addressStr The address where to set the data type as a string.
 	 * @param dataTypeName The name of the data type to apply.
 	 * @param length The length for dynamic data types, or -1 to let the type determine.
@@ -137,11 +138,30 @@ public final class SetGlobalDataType extends Handler {
 
 					Msg.info(this, "Setting data type " + dataType.getName() + " at address " + address);
 
+					// For dynamic types (like TerminatedCString) without explicit length,
+					// auto-detect by scanning memory for the null terminator
+					int effectiveLength = length;
+					if (dataType instanceof Dynamic && effectiveLength <= 0) {
+						ghidra.program.model.mem.Memory mem = program.getMemory();
+						Address scan = address;
+						try {
+							while (mem.getByte(scan) != 0) {
+								scan = scan.add(1);
+							}
+							// Include the null terminator in the length
+							effectiveLength = (int)(scan.subtract(address)) + 1;
+							Msg.info(this, "Auto-detected string length: " + effectiveLength + " at " + address);
+						} catch (Exception ex) {
+							result.set("Error: Could not read memory at " + address + " to determine string length");
+							return;
+						}
+					}
+
 					// Create the data using DataUtilities
-					Data newData = DataUtilities.createData(program, address, dataType, length, clearMode);
-					
+					Data newData = DataUtilities.createData(program, address, dataType, effectiveLength, clearMode);
+
 					if (newData != null) {
-						result.set("Successfully set data type '" + dataType.getName() + 
+						result.set("Successfully set data type '" + dataType.getName() +
 								"' at address " + address + ". Data length: " + newData.getLength() + " bytes.");
 						success = true;
 					} else {
@@ -149,7 +169,7 @@ public final class SetGlobalDataType extends Handler {
 					}
 
 				} catch (CodeUnitInsertionException e) {
-					result.set("Error: Could not insert data at address " + addressStr + 
+					result.set("Error: Could not insert data at address " + addressStr +
 							" - " + e.getMessage() + ". Try using a different clear_mode.");
 				} catch (Exception e) {
 					result.set("Error: Failed to set data type: " + e.getMessage());
@@ -166,7 +186,7 @@ public final class SetGlobalDataType extends Handler {
 
 	/**
 	 * Parses the clear mode string into a ClearDataMode enum value.
-	 * 
+	 *
 	 * @param clearModeStr The clear mode string.
 	 * @return The corresponding ClearDataMode enum value, or CHECK_FOR_SPACE as default.
 	 */
