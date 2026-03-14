@@ -1,11 +1,8 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/mseep-audited.png)](https://mseep.ai/app/lauriewired-ghidramcp)
-
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/pinksawtooth/GhidraMCP)](https://github.com/pinksawtooth/GhidraMCP/releases)
-[![GitHub stars](https://img.shields.io/github/stars/pinksawtooth/GhidraMCP)](https://github.com/pinksawtooth/GhidraMCP/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/pinksawtooth/GhidraMCP)](https://github.com/pinksawtooth/GhidraMCP/network/members)
-[![GitHub contributors](https://img.shields.io/github/contributors/pinksawtooth/GhidraMCP)](https://github.com/pinksawtooth/GhidraMCP/graphs/contributors)
-[![Follow @pinksawtooth](https://img.shields.io/twitter/follow/pinksawtooth?style=social)](https://twitter.com/pinksawtooth)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/sadnescity/GhidraMCP)](https://github.com/sadnescity/GhidraMCP/releases)
+[![GitHub stars](https://img.shields.io/github/stars/sadnescity/GhidraMCP)](https://github.com/sadnescity/GhidraMCP/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/sadnescity/GhidraMCP)](https://github.com/sadnescity/GhidraMCP/network/members)
+[![GitHub contributors](https://img.shields.io/github/contributors/sadnescity/GhidraMCP)](https://github.com/sadnescity/GhidraMCP/graphs/contributors)
 
 ![ghidra_MCP_logo](https://github.com/user-attachments/assets/4986d702-be3f-4697-acce-aea55cd79ad3)
 
@@ -36,7 +33,7 @@ MCP Server + Ghidra Plugin
 - MCP [SDK](https://github.com/modelcontextprotocol/python-sdk)
 
 ## Ghidra
-First, download the latest [release](https://github.com/pinksawtooth/GhidraMCP/releases) from this repository. This contains the Ghidra plugin and Python MCP client. Then, you can directly import the plugin into Ghidra.
+First, download the latest [release](https://github.com/sadnescity/GhidraMCP/releases) from this repository. This contains the Ghidra plugin and Python MCP client. Then, you can directly import the plugin into Ghidra.
 
 ### Plugin Installation
 1. Run Ghidra
