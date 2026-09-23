@@ -347,7 +347,7 @@ def use_program(name: str) -> str:
     reports it.
 
     Args:
-        name: The program name, or a unique part of it.
+        name: The exact program name, as list_instances() shows it (no partial match).
     """
     global current_target, active_instances
 
