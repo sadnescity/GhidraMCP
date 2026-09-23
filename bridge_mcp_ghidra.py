@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "requests>=2,<3",
-#     "mcp>=1.2.0,<2",
+#     "mcp>=2.2,<3",
 # ]
 # ///
 
@@ -17,7 +17,7 @@ import logging
 from typing import Optional
 from urllib.parse import urljoin, urlsplit
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 DEFAULT_REQUEST_TIMEOUT = 30
 DEFAULT_DISCOVERY_BASE_PORT = 8080
@@ -25,7 +25,7 @@ DEFAULT_DISCOVERY_RANGE = 100
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("ghidra-mcp")
+mcp = MCPServer("ghidra-mcp", log_level="INFO")
 
 # Initialize ghidra_request_timeout with default value
 ghidra_request_timeout = DEFAULT_REQUEST_TIMEOUT
@@ -1064,31 +1064,19 @@ def main():
             logging.basicConfig(level=log_level)
             logging.getLogger().setLevel(log_level)
 
-            # Configure MCP settings
-            mcp.settings.log_level = "INFO"
-            if args.mcp_host:
-                mcp.settings.host = args.mcp_host
-            else:
-                mcp.settings.host = "127.0.0.1"
-
-            if args.mcp_port:
-                mcp.settings.port = args.mcp_port
-            else:
-                mcp.settings.port = 8081
+            # mcp 2.x: transport settings are arguments to run(), not fields
+            # of mcp.settings.
+            host = args.mcp_host or "127.0.0.1"
+            port = args.mcp_port or 8081
 
             if transport == "sse":
                 logger.warning("SSE transport is deprecated in MCP; prefer streamable-http.")
-                logger.info(f"Starting MCP server on http://{mcp.settings.host}:{mcp.settings.port}{mcp.settings.sse_path}")
+                logger.info("Starting MCP server on http://%s:%s/sse", host, port)
             else:
-                logger.info(
-                    "Starting MCP server on http://%s:%s%s",
-                    mcp.settings.host,
-                    mcp.settings.port,
-                    mcp.settings.streamable_http_path,
-                )
+                logger.info("Starting MCP server on http://%s:%s/mcp", host, port)
             logger.info(f"Using transport: {transport}")
 
-            mcp.run(transport=transport)
+            mcp.run(transport=transport, host=host, port=port)
         except KeyboardInterrupt:
             logger.info("Server stopped by user")
     else:

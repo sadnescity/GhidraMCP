@@ -25,7 +25,7 @@ The build uses Ghidra's `buildExtension.gradle` script. Output goes to `dist/`.
 
 ### Python Bridge
 ```bash
-pip install -r requirements.txt    # mcp>=1.2.0, requests>=2
+pip install -r requirements.txt    # mcp>=2.2,<3, requests>=2
 python bridge_mcp_ghidra.py        # Run with stdio transport (default)
 python bridge_mcp_ghidra.py --transport streamable-http --mcp-host 127.0.0.1 --mcp-port 8081
 python bridge_mcp_ghidra.py --ghidra-server http://127.0.0.1:8080/   # pin to one instance
@@ -40,14 +40,16 @@ caller's behalf — see "Targeting" below.
 ### Testing
 ```bash
 # Python bridge -- real HTTP servers stand in for Ghidra on a private port range
-uv run --no-project --with pytest --with requests --with "mcp<2" python -m pytest tests/ -q
+uv run --no-project --with pytest --with requests --with "mcp>=2.2,<3" python -m pytest tests/ -q
 
 # Java plugin -- pure logic and the rules that keep handlers honest
 export GHIDRA_INSTALL_DIR=/path/to/ghidra && gradle test
 ```
 Use `--no-project`: a virtualenv left in the project directory is copied into
 the extension zip, which is how an 11 MB one once shipped inside a 1.5 MB
-extension. `mcp<2` matches the pin in `pyproject.toml`; mcp 2.x renamed FastMCP.
+extension. `mcp>=2.2,<3` matches the pin in `pyproject.toml` (mcp 2.x: FastMCP is now
+`MCPServer`, transport host/port go to `run()`, and it speaks MCP 2026-07-28
+while still serving 2025-era clients).
 
 The Java tests cover what can be tested without a running Ghidra: the identity
 guard's decision, transaction naming, and two rules over the sources -- that no
@@ -105,11 +107,11 @@ Handler subpackages organize by operation type:
 All Ghidra API calls from HTTP handlers must run on Swing EDT. Handlers use `SwingUtilities.invokeAndWait()` to safely access Ghidra's non-thread-safe APIs.
 
 ### MCP Bridge (Python)
-`bridge_mcp_ghidra.py` uses `FastMCP` from the `mcp` SDK. Each MCP tool is a decorated function that calls `safe_get()` or `safe_post()` to talk to the Ghidra HTTP server. The bridge supports stdio, SSE (deprecated), and streamable-http transports.
+`bridge_mcp_ghidra.py` uses `MCPServer` (formerly `FastMCP`) from the `mcp` 2.x SDK. Each MCP tool is a decorated function that calls `safe_get()` or `safe_post()` to talk to the Ghidra HTTP server. The bridge supports stdio, SSE (deprecated), and streamable-http transports.
 
 ### Dependencies
 - **Java**: `gson:2.10.1` (JSON), `reflections:0.10.2` (handler discovery), Ghidra framework
-- **Python**: `mcp>=1.2.0`, `requests>=2`
+- **Python**: `mcp>=2.2,<3`, `requests>=2`
 
 ## Adding a New Tool
 
