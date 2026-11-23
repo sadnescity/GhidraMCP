@@ -9,7 +9,7 @@ patch and emulate.
 Two pieces, both Java, nothing else to install (no Python, no SDK):
 
 - the **Ghidra extension**, which serves the programs open in each CodeBrowser on loopback;
-- the **MCP server**, `ghidra-mcp-bridge.jar` (~350 KB, any JDK 21+), which the MCP client
+- the **MCP server**, `ghidra-mcp-bridge.jar` (~320 KB, any JDK 21+), which the MCP client
   starts over stdio and which sends each call to the Ghidra that has the program open.
 
 It implements MCP **2026-07-28** (stateless: `server/discover`, per-request `_meta`, cache
