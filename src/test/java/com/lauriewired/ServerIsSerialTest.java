@@ -1,23 +1,26 @@
 package com.lauriewired;
 
-import org.junit.Test;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertTrue;
 
-import java.nio.file.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+import org.junit.Test;
 
 /**
- * A guard, not a discovery: Handler carries the calling session in a plain
- * field, which is only safe while each server dispatches one request at a time.
- * Giving the HTTP server an executor would make two requests share that field.
- * If you need concurrency, pass the session down instead of storing it.
+ * A guard: each instance runs its tool calls one at a time. The decompiler
+ * cache and Ghidra's DecompInterface are not thread-safe; if you need
+ * concurrency, give each worker its own decompiler first.
  */
 public class ServerIsSerialTest {
 
 	@Test
-	public void theHttpServerDispatchesOneRequestAtATime() throws Exception {
-		String src = Files.readString(
-				Paths.get("src/main/java/com/lauriewired/GhidraMCPPlugin.java"));
-		assertTrue("the server must keep its default (single-threaded) executor",
-				src.contains("server.setExecutor(null)"));
+	public void theInstanceServerRunsOneCallAtATime() throws Exception {
+		String src = Files.readString(Paths.get("src/main/java/com/lauriewired/core/InstanceServer.java"));
+		assertTrue("tool calls must run on a single-threaded executor",
+				src.contains("calls = Executors.newSingleThreadExecutor"));
+		assertTrue("every tool call must go through that executor",
+				src.contains("runner.submit(() -> run(") && src.split("registry\\.invoke\\(", -1).length == 2
+						&& src.indexOf("registry.invoke(") > src.indexOf("private Reply run("));
 	}
 }

@@ -37,26 +37,69 @@ repositories {
 	mavenCentral()
 }
 
+// Gson alone, for the bridge jar (the extension's classpath also has Ghidra's lib/).
+configurations {
+	bridge
+}
+
 dependencies {
 	implementation 'com.google.code.gson:gson:2.10.1'
-	implementation 'org.reflections:reflections:0.10.2'
+	bridge 'com.google.code.gson:gson:2.10.1'
 
 	testImplementation 'junit:junit:4.13.2'
 }
 
-java {
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+// The extension zip is built by copying the whole project directory, so
+// anything a developer leaves lying around ships inside it.
+buildExtension {
+	exclude '.claude/**'
+	exclude '.github/**'
 }
 
-// The extension zip is built by copying the whole project directory, so
-// anything a developer leaves lying around ships inside it -- a stray Python
-// virtualenv put 11 MB of compiled wheels into a 1.5 MB extension once.
-buildExtension {
-	exclude '.venv/**'
-	exclude '**/__pycache__/**'
-	exclude '*.egg-info/**'
-	exclude 'uv.lock'
-	exclude 'tests/**'
-	exclude '.pytest_cache/**'
+// The tool catalog, generated from the @Tool annotations, bundled into the
+// bridge jar so it can list tools before any Ghidra runs.
+def catalogDir = layout.buildDirectory.dir('generated/catalog')
+tasks.register('generateCatalog', JavaExec) {
+	dependsOn 'compileJava'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.lauriewired.core.SchemaDump'
+	args catalogDir.get().file('mcp-tools.json').asFile.absolutePath
+	outputs.dir catalogDir
+	inputs.files sourceSets.main.output.classesDirs
 }
+
+// The extension is the Ghidra side only; the MCP server is the bridge jar.
+jar {
+	exclude 'com/lauriewired/mcp/**'
+}
+
+// The MCP server: com.lauriewired.mcp, the catalog and Gson in one jar, no
+// Ghidra classes. MCP clients start it (the Claude Code plugin ships it):
+//     java -jar ghidra-mcp-bridge.jar
+//
+// Ghidra's build compiles the extension for the Java Ghidra runs on (25 for
+// 12.2). The bridge runs on whatever `java` the client finds, so it is
+// compiled on its own for Java 21: it uses nothing but the JDK and Gson.
+def bridgeClasses = layout.buildDirectory.dir('bridge-classes')
+tasks.register('compileBridge', JavaCompile) {
+	source = fileTree('src/main/java') { include 'com/lauriewired/mcp/**' }
+	classpath = configurations.bridge
+	destinationDirectory = bridgeClasses
+	options.release = 21
+	options.encoding = 'UTF-8'
+}
+tasks.register('bridgeJar', Jar) {
+	dependsOn 'generateCatalog', 'compileBridge'
+	archiveFileName = 'ghidra-mcp-bridge.jar'
+	destinationDirectory = file('dist')
+	from(bridgeClasses)
+	from(catalogDir)
+	from({ configurations.bridge.collect { zipTree(it) } }) {
+		exclude 'META-INF/**', 'module-info.class'
+	}
+	manifest {
+		attributes('Main-Class': 'com.lauriewired.mcp.StdioMain')
+	}
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+buildExtension.dependsOn 'bridgeJar'
