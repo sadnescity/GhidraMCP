@@ -50,6 +50,7 @@ public final class Router {
 
 	public static final String FILE_ID_HEADER = "X-Ghidra-File-ID";
 	public static final String CLIENT_HEADER = "X-Ghidra-Session";
+	public static final String CALL_ID_HEADER = "X-Ghidra-Call-ID";
 
 	private final int basePort;
 	private final int range;
@@ -356,17 +357,23 @@ public final class Router {
 		if (clientTag != null && !clientTag.isEmpty()) {
 			rb.header(CLIENT_HEADER, clientTag);
 		}
+		String callId = java.util.UUID.randomUUID().toString();
+		rb.header(CALL_ID_HEADER, callId);
 		HttpResponse<String> resp;
 		try {
 			resp = http.send(rb.build(), HttpResponse.BodyHandlers.ofString());
 		}
 		catch (java.net.http.HttpTimeoutException e) {
+			cancelInGhidra(t.port(), callId);
 			throw new RouterError("TIMEOUT", "Ghidra did not answer " + tool + " within "
-					+ callTimeout.toSeconds() + " s. It may still be working; check before repeating a write.");
+					+ callTimeout.toSeconds() + " s, so it was asked to stop. Long reads and emulation stop; "
+					+ "a write may still complete, so check before repeating it.");
 		}
 		catch (InterruptedException e) {
+			cancelInGhidra(t.port(), callId);
 			Thread.currentThread().interrupt();
-			throw new RouterError("CANCELLED", "Cancelled while waiting for Ghidra; it may still finish " + tool + ".");
+			throw new RouterError("CANCELLED", "Cancelled; Ghidra was asked to stop " + tool
+					+ " (a write may still complete).");
 		}
 		catch (Exception e) {
 			throw new RouterError("UNREACHABLE", "Could not reach Ghidra on port " + t.port() + ": " + e);
@@ -386,6 +393,24 @@ public final class Router {
 		String code = r.has("code") && !r.get("code").isJsonNull() ? r.get("code").getAsString() : null;
 		String text = r.has("text") && !r.get("text").isJsonNull() ? r.get("text").getAsString() : "";
 		return new Result(ok, code, text);
+	}
+
+	/**
+	 * Tells the instance to stop a call the client gave up on (or to skip it
+	 * if it is still queued). Fire and forget: the answer is not awaited.
+	 */
+	void cancelInGhidra(int port, String callId) {
+		try {
+			HttpRequest req = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp/cancel"))
+					.timeout(Duration.ofSeconds(2))
+					.header(CALL_ID_HEADER, callId)
+					.POST(HttpRequest.BodyPublishers.noBody())
+					.build();
+			http.sendAsync(req, HttpResponse.BodyHandlers.discarding());
+		}
+		catch (Exception e) {
+			// The instance is gone or busy closing; nothing left to stop.
+		}
 	}
 
 	/** The tool schemas from any reachable instance, or an empty list. */

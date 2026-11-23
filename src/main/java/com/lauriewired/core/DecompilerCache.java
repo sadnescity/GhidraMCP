@@ -63,13 +63,16 @@ public final class DecompilerCache {
 			open.put(program, decomp);
 		}
 		DecompileResults r;
-		TaskMonitor monitor = new TaskMonitorAdapter(true);
+		TaskMonitor monitor = ctx != null ? ctx.monitor() : new TaskMonitorAdapter(true);
 		running = monitor;
 		try {
 			r = decomp.decompileFunction(f, timeoutSeconds, monitor);
 		}
 		catch (Exception e) {
 			dispose(program);
+			if (monitor.isCancelled()) {
+				throw ToolError.cancelled();
+			}
 			throw new ToolError("DECOMPILE_FAILED",
 					"Decompilation of " + f.getName() + " failed: " + Ctx.describe(e), e);
 		}
@@ -78,6 +81,9 @@ public final class DecompilerCache {
 		}
 		if (r == null || !r.decompileCompleted()) {
 			dispose(program);
+			if (monitor.isCancelled()) {
+				throw ToolError.cancelled();
+			}
 			String why = r == null ? "no result" : r.getErrorMessage();
 			if (why == null || why.isBlank()) {
 				why = "the decompiler gave no reason (timeout is " + timeoutSeconds + " s)";

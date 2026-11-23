@@ -71,6 +71,10 @@ tells clients listening on `subscriptions/listen` (`notifications/tools/list_cha
 Options: `--discovery-base-port 8080`, `--discovery-range 100`, `--ghidra-timeout 120`
 (seconds), `--version`.
 
+A call the client cancels, or that runs past `--ghidra-timeout`, is stopped inside Ghidra too
+(or skipped if it is still waiting its turn): emulation and decompilation stop, so the next call
+to that Ghidra is not stuck behind it. A write that is already running still completes.
+
 There is no HTTP MCP endpoint: MCP over HTTP is meant for remote servers, and a local one would
 be one more open port to protect.
 

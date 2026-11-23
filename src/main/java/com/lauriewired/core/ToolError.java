@@ -25,6 +25,10 @@ public class ToolError extends RuntimeException {
 		return code;
 	}
 
+	public static ToolError cancelled() {
+		return new ToolError("CANCELLED", "The client cancelled this call (or stopped waiting); it was stopped.");
+	}
+
 	public static ToolError noProgram() {
 		return new ToolError("NO_PROGRAM", "No program is open in this Ghidra instance");
 	}

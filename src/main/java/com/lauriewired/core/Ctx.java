@@ -21,6 +21,8 @@ import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolIterator;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
+import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorAdapter;
 
 /**
  * Everything a tool needs for one call: the program it acts on, the tool that
@@ -40,12 +42,34 @@ public final class Ctx {
 	private final Program program;
 	private final String sessionTag;
 	private final Services services;
+	private final TaskMonitor monitor;
 
 	public Ctx(PluginTool tool, Program program, String sessionTag, Services services) {
+		this(tool, program, sessionTag, services, new TaskMonitorAdapter(true));
+	}
+
+	/** @param monitor cancelled when the client gives up on the call */
+	public Ctx(PluginTool tool, Program program, String sessionTag, Services services, TaskMonitor monitor) {
 		this.tool = tool;
 		this.program = program;
 		this.sessionTag = sessionTag == null ? "" : sessionTag;
 		this.services = services;
+		this.monitor = monitor;
+	}
+
+	/**
+	 * Cancelled when the client gives up on this call (it was cancelled, or
+	 * timed out). Long-running tools pass it to Ghidra or poll it.
+	 */
+	public TaskMonitor monitor() {
+		return monitor;
+	}
+
+	/** Stops a long-running tool once the client has given up on it. */
+	public void checkCancelled() {
+		if (monitor.isCancelled()) {
+			throw ToolError.cancelled();
+		}
 	}
 
 	/** The program this call acts on. Never null for a tool that needs one. */

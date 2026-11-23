@@ -56,6 +56,8 @@ public class McpServerTest {
 		volatile boolean silent;
 		volatile boolean refuse;
 		volatile long pid = -1;
+		volatile boolean holdCalls;
+		final List<String> cancels = new CopyOnWriteArrayList<>();
 		final CountDownLatch release = new CountDownLatch(1);
 		final HttpServer server;
 
@@ -108,6 +110,11 @@ public class McpServerTest {
 				reply(ex, 200, catalog);
 				return;
 			}
+			if (path.equals("/mcp/cancel")) {
+				cancels.add(String.valueOf(ex.getRequestHeaders().getFirst(Router.CALL_ID_HEADER)));
+				reply(ex, 200, "{\"ok\":true}");
+				return;
+			}
 			if (path.equals("/mcp/call")) {
 				JsonObject req = JsonParser.parseString(new String(body, StandardCharsets.UTF_8)).getAsJsonObject();
 				String fid = ex.getRequestHeaders().getFirst(Router.FILE_ID_HEADER);
@@ -121,7 +128,19 @@ public class McpServerTest {
 				if (client != null) {
 					rec.put("client", client);
 				}
+				String callId = ex.getRequestHeaders().getFirst(Router.CALL_ID_HEADER);
+				if (callId != null) {
+					rec.put("call_id", callId);
+				}
 				calls.add(rec);
+				if (holdCalls) {
+					try {
+						release.await(5, TimeUnit.SECONDS);
+					}
+					catch (InterruptedException e) {
+						return;
+					}
+				}
 				boolean mine = !refuse && fid != null && programs.stream().anyMatch(p -> p[1].equals(fid));
 				JsonObject r = new JsonObject();
 				r.addProperty("ok", mine);
@@ -317,6 +336,27 @@ public class McpServerTest {
 		t.join(5000);
 		assertEquals("CANCELLED", code.get());
 		assertTrue(b.calls.isEmpty());
+	}
+
+	@Test
+	public void aCallThatTimesOutIsStoppedInGhidra() throws Exception {
+		Fake a = fake(0, "proj", "GAME_A", "fa");
+		a.holdCalls = true;
+		Router quick = new Router(base, 4, Duration.ofSeconds(1));
+		Target t = quick.resolve("GAME_A");
+		String code = null;
+		try {
+			quick.call(t, null, "decompile_function", new JsonObject());
+		}
+		catch (RouterError e) {
+			code = e.code();
+		}
+		assertEquals("TIMEOUT", code);
+		for (int i = 0; i < 100 && a.cancels.isEmpty(); i++) {
+			Thread.sleep(20);
+		}
+		assertEquals(1, a.calls.size());
+		assertEquals(List.of(a.calls.get(0).get("call_id")), a.cancels);
 	}
 
 	@Test

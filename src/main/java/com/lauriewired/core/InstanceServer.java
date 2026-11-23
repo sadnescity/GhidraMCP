@@ -6,7 +6,9 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,6 +27,8 @@ import ghidra.framework.model.DomainFile;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
+import ghidra.util.task.TaskMonitor;
+import ghidra.util.task.TaskMonitorAdapter;
 
 /**
  * One Ghidra tool's endpoint on loopback: says what it holds (/instances,
@@ -41,11 +45,13 @@ import ghidra.util.Msg;
 public final class InstanceServer {
 
 	/** Version of this endpoint's protocol, reported on /instances and /health. */
-	public static final String VERSION = "4.0.0";
+	public static final String VERSION = "4.1.0";
 	/** The database a call is for. Required: a call never falls back to the program in front. */
 	public static final String FILE_ID_HEADER = "X-Ghidra-File-ID";
 	/** Names the MCP client in the undo history. */
 	public static final String CLIENT_HEADER = "X-Ghidra-Session";
+	/** Names one call, so the client can cancel it (POST /mcp/cancel with the same header). */
+	public static final String CALL_ID_HEADER = "X-Ghidra-Call-ID";
 	private static final Set<String> LOCAL_HOSTS = Set.of("127.0.0.1", "localhost", "[::1]", "::1");
 
 	private final PluginTool tool;
@@ -58,6 +64,8 @@ public final class InstanceServer {
 	/** Runs the tool calls, one at a time. */
 	private volatile ExecutorService calls;
 	private int port = -1;
+	/** The calls queued or running, by call id: cancelling one cancels its monitor. */
+	private final Map<String, TaskMonitor> running = new ConcurrentHashMap<>();
 
 	public InstanceServer(PluginTool tool, ToolRegistry registry, Services services, Supplier<Program> current) {
 		this.tool = tool;
@@ -146,6 +154,7 @@ public final class InstanceServer {
 				case "/health" -> send(ex, 200, "application/json", health().toString());
 				case "/mcp/tools" -> send(ex, 200, "application/json", registry.schema().toString());
 				case "/mcp/call" -> call(ex);
+				case "/mcp/cancel" -> cancel(ex);
 				default -> send(ex, 404, "text/plain", "Unknown endpoint " + path
 						+ ". This plugin speaks MCP through /mcp/call; update any old bridge.");
 			}
@@ -194,13 +203,18 @@ public final class InstanceServer {
 					"The call names no program (" + FILE_ID_HEADER + "). Nothing was done.").toString());
 			return;
 		}
+		String callId = ex.getRequestHeaders().getFirst(CALL_ID_HEADER);
+		TaskMonitor monitor = new TaskMonitorAdapter(true);
+		if (callId != null) {
+			running.put(callId, monitor);
+		}
 		ExecutorService runner = calls;
 		Reply reply;
 		try {
 			if (runner == null) {
 				throw new RejectedExecutionException();
 			}
-			Future<Reply> f = runner.submit(() -> run(name, args, fileId, session));
+			Future<Reply> f = runner.submit(() -> run(name, args, fileId, session, monitor));
 			reply = f.get();
 		}
 		catch (InterruptedException | RejectedExecutionException e) {
@@ -214,11 +228,36 @@ public final class InstanceServer {
 			send(ex, 500, "application/json", failure("INTERNAL_ERROR", cause.toString()).toString());
 			return;
 		}
+		finally {
+			if (callId != null) {
+				running.remove(callId, monitor);
+			}
+		}
 		send(ex, reply.status(), "application/json", reply.body().toString());
 	}
 
+	/** The client gave up on a call: stop it if it is running, skip it if it is still queued. */
+	private void cancel(HttpExchange ex) throws IOException {
+		if (!"POST".equals(ex.getRequestMethod())) {
+			send(ex, 405, "text/plain", "POST only");
+			return;
+		}
+		String callId = ex.getRequestHeaders().getFirst(CALL_ID_HEADER);
+		TaskMonitor m = callId == null ? null : running.get(callId);
+		if (m != null) {
+			m.cancel();
+		}
+		JsonObject r = new JsonObject();
+		r.addProperty("ok", true);
+		r.addProperty("cancelled", m != null);
+		send(ex, 200, "application/json", r.toString());
+	}
+
 	/** One tool call, on the call thread. */
-	private Reply run(String name, JsonObject args, String fileId, String session) {
+	private Reply run(String name, JsonObject args, String fileId, String session, TaskMonitor monitor) {
+		if (monitor.isCancelled()) {
+			return new Reply(200, failure("CANCELLED", "The client cancelled " + name + " before it started; nothing was done."));
+		}
 		Program program = openProgram(fileId);
 		// Held for the call, so closing the program in the UI meanwhile does not
 		// destroy it under the tool; it closes when the call releases it.
@@ -232,7 +271,7 @@ public final class InstanceServer {
 					+ ". Nothing was done."));
 		}
 		try {
-			Ctx ctx = new Ctx(tool, program, session, services);
+			Ctx ctx = new Ctx(tool, program, session, services, monitor);
 			String text = registry.invoke(name, args, ctx);
 			JsonObject r = new JsonObject();
 			r.addProperty("ok", true);

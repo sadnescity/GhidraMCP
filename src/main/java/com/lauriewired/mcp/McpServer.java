@@ -36,7 +36,7 @@ import com.google.gson.JsonParser;
 public final class McpServer {
 
 	public static final String NAME = "ghidra-mcp";
-	public static final String VERSION = "4.0.0";
+	public static final String VERSION = "4.1.0";
 	/** Revisions served statelessly, newest first. */
 	static final List<String> MODERN = List.of("2026-07-28");
 	/** Handshake revisions answered to an initialize request, newest first. */
